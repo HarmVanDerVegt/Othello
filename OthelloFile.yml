@@ -1,0 +1,10 @@
+source:
+  dotnet_version: "3.1"
+  environment: "Debug"
+
+target:
+  hostname: <hostname>
+  user: <user>
+  directory: <directory>
+
+amount: 5
