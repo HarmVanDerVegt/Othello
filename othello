@@ -1,0 +1,202 @@
+#!/usr/bin/env ruby
+require 'bundler/inline'
+require 'io/console'
+require 'date'
+require 'yaml'
+require 'optionparser'
+require 'securerandom'
+
+p 'Fetching dependencies, might take a while'
+
+#Let's keep this as small as possible by inlining our Gemfile
+gemfile do
+  source 'https://rubygems.org'
+  gem 'net-ssh', require: 'net/ssh'
+  gem 'net-scp', require: 'net/scp'
+end
+
+class Othello
+
+  def self.install package
+    if `which #{package}`.empty?
+      p "#{package} not found."
+      p "Installing #{package}"
+      `sudo apt install #{package}` unless options.include? 'd'
+      p "#{package} installed."
+    end
+  end
+
+  def self.not_found offender
+    p "#{offender} not found"
+    p "Exiting now."
+    exit
+  end
+
+  options = Array.new
+  OptionParser.new do |opts|
+    opts.banner = 'Usage: othello [options]'
+    opts.on('-d', '--dry-run', 'Prevents execution of commands') do
+      options << 'd'
+    end
+  end.parse!
+
+  dir = Dir.getwd
+  project_name = File.basename(dir)
+
+  install 'zip'
+  install 'unzip'
+
+  if `which dotnet`.empty?
+    not_found '.NET'
+  end
+
+  p 'All dependencies found.'
+
+  if Dir.glob('*.csproj').empty?
+    not_found 'C# project'
+  end
+
+  if Dir.glob('OthelloFile.yml').empty?
+    not_found 'Othello Config file'
+  end
+
+  p 'Loading config file.'
+
+  config = YAML.load_file 'OthelloFile.yml'
+
+  p 'Publishing, might take a while'
+
+  `dotnet publish` unless options.include? 'd'
+
+  p 'Publishing finished.'
+
+  source = config['source']
+  environment = source['environment']
+  dotnet_version = source['dotnet_version']
+
+  dir = dir + "/bin/#{environment}"
+  dir = dir + "/netcoreapp" + dotnet_version
+
+  d = Date.today
+  t = Time.now
+  output = 'publish'  + '-' +
+			d.year.to_s +
+			'-' +
+			d.month.to_s.rjust(2, '0') +
+			'-' +
+			d.day.to_s.rjust(2, '0') +
+			'-' +
+			t.hour.to_s.rjust(2, '0') +
+			t.min.to_s.rjust(2, '0') +
+			t.sec.to_s.rjust(2, '0') +
+			'.zip'
+
+  p "Zipping started, might take a while."
+
+  Dir.chdir(dir) do
+
+    `zip -r #{output} publish` unless options.include? 'd'
+
+    p 'Finished zipping.'
+
+    p 'Enter your password:'
+    
+    password = STDIN.noecho(&:gets).chomp
+
+    target = config['target']
+    host = target['hostname']
+    user = target['user']
+    directory = target['directory'] + '/' + project_name
+    new_directory = directory +  '/new'
+    
+    p 'Starting upload.'
+    Net::SCP.upload!(host, user, output, new_directory,
+		     { password: password, auth_methods: :password }) unless options.include? 'd'
+    
+    p 'Finished upload.'
+
+    Net::SSH.start(host, user, password: password) do |ssh|
+
+      def self.exec_with_sudo command, ssh, password
+        if not command["sudo "].nil?
+          command = "echo -e \"#{password}\n\" | " + command.gsub(/sudo/, 'sudo -S')
+        end
+        ssh.exec!(command)
+      end
+
+      zip_file = new_directory + '/' + output
+      new_file = zip_file.gsub("new", "current").delete_suffix '.zip'
+      current_directory = directory + "/current"
+      old_directory = directory + "/old_releases"
+
+      if ssh.exec!('which unzip').empty?
+        p 'Unzip not found on remote.'
+        p 'Installing unzip.'
+        `sudo apt install unzip`
+        p 'Unzip installed.'
+      end
+ 
+      if !(ssh.exec!("ls #{directory}").include? 'current')
+        p "This is apparently our first time."
+        p "Moving our release to /current"
+        exec_with_sudo("sudo mkdir #{current_directory}", ssh, password)
+        exec_with_sudo("sudo mkdir #{old_directory}", ssh, password)
+        exec_with_sudo("sudo chown -R #{user}:#{user} #{current_directory}", ssh, password)
+        exec_with_sudo("sudo chown -R #{user}:#{user} #{old_directory}", ssh, password)
+        exec_with_sudo("sudo mv #{zip_file} #{current_directory}", ssh, password)
+      else
+
+        p "Replacing an earlier version"
+
+        #If there is already a /current we place that one in /old_releases
+        #and we remove the oldest if we are above our limit.
+        exec_with_sudo("sudo mv #{current_directory}/publish* #{old_directory}", ssh, password)
+        
+        #Counts the amount of folders we currently have
+        #Does not work with hidden folers, but we don't have any. (!)
+        number_of_copies = ssh.exec!("ls #{old_directory} | wc -l").to_i
+
+        if number_of_copies > config['amount']
+          p "Removing the oldest release"
+          #Remove the oldest folder. Does not work if there is whitespace
+          #TODO: Remove whitespace after unzipping
+          files = ssh.exec!("ls #{old_directory} -v")
+          files = files.split " "
+          exec_with_sudo("sudo rm -R #{old_directory}/#{files.first}", ssh, password)
+        end
+
+        #We've cleared /current, so we can place the new release in there.
+        p "Moving newest release to /current"
+        exec_with_sudo("sudo mv #{zip_file} #{current_directory}", ssh, password) 
+      end
+
+      p 'Succesfully uploaded the newest release'
+
+      p 'Unzipping latest release, might take a while..'
+      exec_with_sudo("unzip #{current_directory}/#{output} -d #{current_directory}", ssh, password)
+      exec_with_sudo("sudo rm #{current_directory}/#{output}", ssh, password)
+
+      #Renaming generic publish to publish with timestamp
+      exec_with_sudo("sudo mv #{current_directory}/publish #{new_file}", ssh, password)
+      exec_with_sudo("sudo chown -R #{user}:#{user} #{new_file}", ssh, password)
+      p 'Finished unzipping.'
+
+      p "Killing the old application server if it is running"
+      exec_with_sudo("sudo kill $(ps aux | grep '#{project_name}.dll' | grep -v 'grep' | awk '{print $2}')", ssh, password)
+
+      p "Starting the application server"
+      #Since net/shh opens a new shell for every command we need
+      #to combine the cd command with the dotnet command.
+      #Dotnet uses our working directory as its base but the given path
+      #as argument to strat the app. dotnet a/b.dll runs b.dll fine but uses
+      #a as its base directory, which kills the entire app.
+      ssh.exec("cd #{new_file} && dotnet #{project_name}.dll &")
+      p "Application server started"
+
+    end unless options.include? 'd'
+
+    p "Removing local zipped publish directory"
+    `rm #{output}`
+    p "Finished"
+  end
+end
