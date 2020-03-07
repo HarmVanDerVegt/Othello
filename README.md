@@ -4,7 +4,7 @@ Deployment script for Reversi application server.
 Please note that this is only testes on a Debian local environment and a Debian target.
 This script will not work on any non-Linux environment.
 
-#What does it do
+# What does it do
 Othello deploys your C# application server on the target of your choice, like an acceptance environment.
 It does this in the following way:
   * runs `dotnet publish` locally.
@@ -18,10 +18,10 @@ It does this in the following way:
   * starts the new application server
   * deletes the zipped output locally
  
-#How to use
+# How to use
 Simply run `othello` in the folder containing your `.csproj` file.
 
-#How to install and setup
+# How to install and setup
 1. clone this repo on your local Debian machine. `git clone https://github.com/HarmVanDerVegt/Othello`
 2. run `chmod +x othello`
 3. `mv othello /bin`
