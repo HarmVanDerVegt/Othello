@@ -1,7 +1,7 @@
 # Othello
 Deployment script for Reversi application server.
 
-Please note that this is only testes on a Debian local environment and a Debian target.
+Please note that this is only tested on a Debian local environment and a Debian target.
 This script will not work on any non-Linux environment.
 
 # What does it do
