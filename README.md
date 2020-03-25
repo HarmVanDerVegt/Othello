@@ -30,7 +30,7 @@ Simply run `othello` in the folder containing your `.csproj` file.
 6. edit your OthelloFile.yml with your hostname, user and directory settings.
 7. create the directory you've entered in your OthelloFile on your server.
 8. in your directory create a folder called `new`
-9. give you user rights to this folder. `sudo chmod -R <user>:<user> <directory>/new`
+9. give you user rights to this folder. `sudo chown -R <user>:<user> <directory>/new`
 10. Run othello in your local project folder.
 
 From now on you can sinply run `othello` whenever you've made changes to your C# application server.
